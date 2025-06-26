@@ -1,51 +1,29 @@
 # backend/main.py
-from utils.download import maybe_download_model
-maybe_download_model()
 
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
-import os
-import shutil
-import torch
+import os, shutil, torch
 from torchvision.models import efficientnet_b0
 import torch.nn as nn
 from PIL import Image
 from torchvision import transforms
 from utils.extract_frames import extract_frames
+from utils.download import maybe_download_model  # ✅ 추가
 
 from fastapi.middleware.cors import CORSMiddleware
 
-import os
-import requests
-
-# 구글 드라이브 다운로드 함수
-def download_from_google_drive(url, output_path):
-    response = requests.get(url, allow_redirects=True)
-    with open(output_path, 'wb') as f:
-        f.write(response.content)
-
-# .pth 파일이 없으면 다운로드
-pth_path = "checkpoints/deepfake_efficientnet.pth"
-if not os.path.exists(pth_path):
-    os.makedirs("checkpoints", exist_ok=True)
-    print("🧩 Downloading model...")
-    download_from_google_drive(
-        "https://drive.google.com/uc?export=download&id=1596t3TegPKwnaKGTk2z7YnbJGeGUuO6A",  # 공유 링크에서 id만 추출
-        pth_path
-    )
-
-
-
 app = FastAPI()
 
-# CORS 설정 추가
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 또는 ["http://localhost:3000"]
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ✅ 모델 자동 다운로드
+maybe_download_model()
 
 # ---------------------------
 # 모델 로딩
@@ -77,13 +55,11 @@ async def analyze_video(file: UploadFile = File(...)):
 
     print("✅ 업로드 파일 저장 완료")
 
-    # 프레임 추출
     os.makedirs(temp_frame_dir, exist_ok=True)
     num_frames = extract_frames(temp_video_path, temp_frame_dir, max_frames=32)
     print(f"📸 추출된 프레임 수: {num_frames}")
 
     if num_frames == 0:
-        print("❌ 프레임 추출 실패")
         return JSONResponse(status_code=400, content={"error": "프레임 추출 실패"})
 
     try:
