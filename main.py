@@ -1,4 +1,6 @@
 # backend/main.py
+from utils.download import maybe_download_model
+maybe_download_model()
 
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
@@ -12,6 +14,27 @@ from torchvision import transforms
 from utils.extract_frames import extract_frames
 
 from fastapi.middleware.cors import CORSMiddleware
+
+import os
+import requests
+
+# 구글 드라이브 다운로드 함수
+def download_from_google_drive(url, output_path):
+    response = requests.get(url, allow_redirects=True)
+    with open(output_path, 'wb') as f:
+        f.write(response.content)
+
+# .pth 파일이 없으면 다운로드
+pth_path = "checkpoints/deepfake_efficientnet.pth"
+if not os.path.exists(pth_path):
+    os.makedirs("checkpoints", exist_ok=True)
+    print("🧩 Downloading model...")
+    download_from_google_drive(
+        "https://drive.google.com/uc?export=download&id=1596t3TegPKwnaKGTk2z7YnbJGeGUuO6A",  # 공유 링크에서 id만 추출
+        pth_path
+    )
+
+
 
 app = FastAPI()
 
