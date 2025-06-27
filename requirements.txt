@@ -4,4 +4,5 @@ torch
 torchvision
 opencv-python
 pillow
-requests       
+requests
+python-multipart  
