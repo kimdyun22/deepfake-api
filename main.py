@@ -87,3 +87,8 @@ async def analyze_video(file: UploadFile = File(...)):
         "deepfake_probability": round(prob * 100, 2),
         "prediction": "FAKE" if prob > 0.5 else "REAL"
     }
+
+
+@app.get("/")
+def health_check():
+    return {"status": "✅ Deepfake API is running."}
