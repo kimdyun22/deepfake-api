@@ -48,8 +48,35 @@ class SA_Xception(nn.Module):
 # ---------------------------
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-MODEL_PATH = "checkpoints/x_best_sa_xception.pth"  # ✅ 로컬 체크포인트 사용
-assert os.path.exists(MODEL_PATH), f"모델 파일이 없습니다: {MODEL_PATH}"
+# ---------------------------
+# 모델 경로 해석 (절대경로 + 여러 후보 + 환경변수)
+# ---------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+CANDIDATES = [
+    os.getenv("MODEL_PATH", "").strip(),                                   # ▶ Render 환경변수로 직접 지정 가능
+    os.path.join(BASE_DIR, "checkpoints", "x_best_sa_xception.pth"),       # ▶ /app/main.py 기준
+    "/app/checkpoints/x_best_sa_xception.pth",                              # ▶ Docker에서 자주 쓰는 절대경로
+    os.path.join(os.getcwd(), "checkpoints", "x_best_sa_xception.pth"),     # ▶ CWD 기준
+    "checkpoints/x_best_sa_xception.pth",                                   # ▶ 상대경로(최후)
+]
+
+MODEL_PATH = next((p for p in CANDIDATES if p and os.path.exists(p)), None)
+
+if MODEL_PATH is None:
+    # 디버깅 정보 출력 후 에러
+    print("[debug] CWD:", os.getcwd())
+    for d in [BASE_DIR, os.path.join(BASE_DIR, "checkpoints"), "/app/checkpoints", "./checkpoints"]:
+        try:
+            print(f"[debug] ls {d} ->", os.listdir(d))
+        except Exception as e:
+            print(f"[debug] ls {d} failed:", e)
+    raise FileNotFoundError(
+        "모델 파일을 찾을 수 없습니다. MODEL_PATH 환경변수로 절대경로를 지정하거나, "
+        "이미지에 /app/checkpoints/x_best_sa_xception.pth 를 포함시켜 주세요."
+    )
+
+print(f"[model] using checkpoint: {MODEL_PATH}")
 
 model = SA_Xception(num_classes=2)
 ckpt = torch.load(MODEL_PATH, map_location=DEVICE)
