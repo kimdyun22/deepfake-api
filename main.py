@@ -26,7 +26,7 @@ app.add_middleware(
 class SA_Xception(nn.Module):
     def __init__(self, base_model='xception', num_classes=2):
         super().__init__()
-        self.backbone = timm.create_model(base_model, pretrained=True, num_classes=0)
+        self.backbone = timm.create_model(base_model, pretrained=False, num_classes=0)
         self.attention = nn.Sequential(
             nn.Conv2d(2048, 512, kernel_size=1),
             nn.ReLU(),
