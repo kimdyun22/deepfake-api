@@ -1,9 +1,7 @@
 fastapi
 uvicorn
-torch
-torchvision
+onnxruntime
 opencv-python-headless
 pillow
-requests
+numpy
 python-multipart
-timm
