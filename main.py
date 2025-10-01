@@ -1,81 +1,94 @@
-import os, shutil
-import numpy as np
+# backend/main.py
+
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
+import os, shutil, torch
+from torchvision.models import efficientnet_b0
+import torch.nn as nn
 from PIL import Image
 from torchvision import transforms
-import onnxruntime as ort
 from utils.extract_frames import extract_frames
-import torch  # 전처리/softmax 편의용
+from utils.download import maybe_download_model  # ✅ 추가
+
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-                   allow_methods=["*"], allow_headers=["*"])
 
-# 모델 경로 (양자화했으면 int8 onnx를 지정)
-BASE = os.path.dirname(os.path.abspath(__file__))
-CAND = [
-    os.getenv("MODEL_PATH","").strip(),
-    os.path.join(BASE, "checkpoints", "sa_xception.int8.onnx"),
-    os.path.join(BASE, "checkpoints", "sa_xception.onnx"),
-    "/app/checkpoints/sa_xception.int8.onnx",
-    "/app/checkpoints/sa_xception.onnx",
-]
-MODEL_PATH = next((p for p in CAND if p and os.path.exists(p)), None)
-assert MODEL_PATH, "ONNX 모델을 찾을 수 없습니다."
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-sess = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
+# ✅ 모델 자동 다운로드
+maybe_download_model()
 
+# ---------------------------
+# 모델 로딩
+# ---------------------------
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = efficientnet_b0(weights=None)
+model.classifier[1] = nn.Linear(model.classifier[1].in_features, 1)
+model.load_state_dict(torch.load("checkpoints/deepfake_efficientnet.pth", map_location=DEVICE))
+model.eval().to(DEVICE)
+
+# ---------------------------
+# 전처리 정의
+# ---------------------------
 transform = transforms.Compose([
-    transforms.Resize((299,299)),
+    transforms.Resize((224, 224)),
     transforms.ToTensor(),
-    transforms.Normalize([0.5]*3, [0.5]*3),
 ])
 
-CLASS_NAMES = ["REAL","FAKE"]
-FAKE_IDX = 1
-
+# ---------------------------
+# API 엔드포인트
+# ---------------------------
 @app.post("/analyze")
 async def analyze_video(file: UploadFile = File(...)):
     temp_video_path = "temp_video.mp4"
     temp_frame_dir = "temp_frames"
+
     with open(temp_video_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
+    print("✅ 업로드 파일 저장 완료")
+
     os.makedirs(temp_frame_dir, exist_ok=True)
-    n = extract_frames(temp_video_path, temp_frame_dir, max_frames=32)
-    if n == 0:
-        cleanup(temp_video_path, temp_frame_dir)
-        return JSONResponse(status_code=400, content={"error":"프레임 추출 실패"})
+    num_frames = extract_frames(temp_video_path, temp_frame_dir, max_frames=32)
+    print(f"📸 추출된 프레임 수: {num_frames}")
+
+    if num_frames == 0:
+        return JSONResponse(status_code=400, content={"error": "프레임 추출 실패"})
 
     try:
-        frames = []
-        for i in range(n):
-            img = Image.open(os.path.join(temp_frame_dir, f"frame_{i:03d}.jpg")).convert("RGB")
-            frames.append(transform(img))
-        # 기존과 동일: 프레임 평균 → 1장처럼
-        x = (sum(frames)/len(frames)).unsqueeze(0).numpy().astype(np.float32)  # (1,3,299,299)
-        logits = sess.run(None, {"input": x})[0]  # (1,2)
-        probs = torch.softmax(torch.from_numpy(logits), dim=1).squeeze(0)
-        pred_idx = int(torch.argmax(probs).item())
-        prob_fake = float(probs[FAKE_IDX].item())
-        out = {
-            "class_probabilities": {CLASS_NAMES[i]: float(probs[i]) for i in range(len(CLASS_NAMES))},
-            "deepfake_probability": round(prob_fake*100, 2),
-            "prediction": CLASS_NAMES[pred_idx]
-        }
-        return out
+        inputs = []
+        for i in range(num_frames):
+            frame_path = os.path.join(temp_frame_dir, f"frame_{i:03d}.jpg")
+            img = Image.open(frame_path).convert("RGB")
+            inputs.append(transform(img))
+        input_tensor = sum(inputs) / len(inputs)
+        input_tensor = input_tensor.unsqueeze(0).to(DEVICE)
+
+        with torch.no_grad():
+            output = model(input_tensor)
+            prob = torch.sigmoid(output).item()
+
+        print(f"🧠 예측 결과: {prob:.4f}")
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error":"추론 실패", "detail": str(e)})
-    finally:
-        cleanup(temp_video_path, temp_frame_dir)
+        print(f"❌ 예측 중 오류 발생: {e}")
+        return JSONResponse(status_code=500, content={"error": "추론 실패"})
 
-def cleanup(video, frame_dir):
-    try:
-        if os.path.exists(video): os.remove(video)
-        if os.path.exists(frame_dir): shutil.rmtree(frame_dir)
-    except: pass
+    os.remove(temp_video_path)
+    shutil.rmtree(temp_frame_dir)
+
+    return {
+        "deepfake_probability": round(prob * 100, 2),
+        "prediction": "FAKE" if prob > 0.5 else "REAL"
+    }
+
 
 @app.get("/")
-def health(): return {"status":"ok", "model": os.path.basename(MODEL_PATH)}
+def health_check():
+    return {"status": "✅ Deepfake API is running."}
